@@ -160,7 +160,6 @@ const showOnlineScriptList = ref(false);
 const tableRef = ref<any>(null);
 let sortableInstance: Sortable | null = null;
 let scrollContainer: HTMLElement | null = null;
-let mouseMoveHandler: ((e: MouseEvent) => void) | null = null;
 let rafId: number | null = null;
 // 跟踪每个脚本的更新状态
 const updatingEnabledMap = ref<Map<string, boolean>>(new Map());
@@ -188,11 +187,6 @@ watch(visible, (val) => {
       clearTimeout(updateDebounceTimer);
       updateDebounceTimer = null;
     }
-    // 移除鼠标移动监听
-    if (mouseMoveHandler) {
-      document.removeEventListener("mousemove", mouseMoveHandler, { capture: true } as any);
-      mouseMoveHandler = null;
-    }
     scrollContainer = null;
   }
 });
@@ -206,11 +200,6 @@ onUnmounted(() => {
   if (updateDebounceTimer) {
     clearTimeout(updateDebounceTimer);
     updateDebounceTimer = null;
-  }
-  // 移除鼠标移动监听
-  if (mouseMoveHandler) {
-    document.removeEventListener("mousemove", mouseMoveHandler, { capture: true } as any);
-    mouseMoveHandler = null;
   }
   scrollContainer = null;
 });
@@ -249,122 +238,21 @@ function initSortable() {
   );
   if (!tbody) return;
 
-  // 获取滚动容器（表格的 body wrapper）
-  // Element Plus 表格的滚动容器是 .el-scrollbar__wrap 或 .el-table__body-wrapper
-  scrollContainer = tableRef.value.$el.querySelector(
-    ".el-scrollbar__wrap"
-  ) as HTMLElement || tableRef.value.$el.querySelector(
-    ".el-table__body-wrapper"
-  ) as HTMLElement;
-
-  if (!scrollContainer) {
-    console.warn("无法找到滚动容器，尝试查找所有可能的滚动元素");
-    // 尝试查找所有可能的滚动容器
-    const possibleContainers = tableRef.value.$el.querySelectorAll(
-      ".el-table__body-wrapper, .el-scrollbar__wrap, .el-table__body"
-    );
-    if (possibleContainers.length > 0) {
-      // 找到第一个有滚动条的元素
-      for (let i = 0; i < possibleContainers.length; i++) {
-        const el = possibleContainers[i] as HTMLElement;
-        if (el.scrollHeight > el.clientHeight) {
-          scrollContainer = el;
-          break;
-        }
-      }
-    }
-  }
-
-  if (!scrollContainer) {
-    console.error("无法找到滚动容器");
-    return;
-  }
-
-  console.log("滚动容器找到:", scrollContainer, {
-    scrollHeight: scrollContainer.scrollHeight,
-    clientHeight: scrollContainer.clientHeight,
-    scrollTop: scrollContainer.scrollTop
-  });
-
-  // 创建鼠标移动处理函数
-  const container = scrollContainer; // 保存引用，避免闭包问题
-  mouseMoveHandler = (e: MouseEvent) => {
-    if (!container) return;
-    
-    // 取消之前的动画帧
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-    }
-    
-    // 使用 requestAnimationFrame 确保流畅滚动
-    rafId = requestAnimationFrame(() => {
-      if (!container) {
-        rafId = null;
-        return;
-      }
-      
-      const rect = container.getBoundingClientRect();
-      const mouseY = e.clientY;
-      const scrollThreshold = 80; // 滚动触发区域
-      const scrollSpeed = 30; // 滚动速度（增大）
-      
-      // 检查鼠标是否在滚动容器内或附近
-      const isNearContainer = mouseY >= rect.top - 50 && mouseY <= rect.bottom + 50;
-      if (!isNearContainer) {
-        rafId = null;
-        return;
-      }
-      
-      // 检查是否可以滚动
-      const canScroll = container.scrollHeight > container.clientHeight;
-      if (!canScroll) {
-        rafId = null;
-        return;
-      }
-      
-      // 检查是否接近顶部
-      const distanceFromTop = mouseY - rect.top;
-      if (distanceFromTop < scrollThreshold && distanceFromTop > -50) {
-        const newScrollTop = container.scrollTop - scrollSpeed;
-        container.scrollTop = Math.max(0, newScrollTop);
-      }
-      // 检查是否接近底部
-      const distanceFromBottom = rect.bottom - mouseY;
-      if (distanceFromBottom < scrollThreshold && distanceFromBottom > -50) {
-        const maxScroll = container.scrollHeight - container.clientHeight;
-        const newScrollTop = container.scrollTop + scrollSpeed;
-        container.scrollTop = Math.min(maxScroll, newScrollTop);
-      }
-      
-      rafId = null;
-    });
-  };
-
   sortableInstance = Sortable.create(tbody, {
     handle: ".drag-handle-cell", // 指定拖拽手柄（整个单元格）
     animation: 150,
     ghostClass: "sortable-ghost",
     chosenClass: "sortable-chosen",
     dragClass: "sortable-drag",
-    forceFallback: false,
-    // 滚动配置（作为备选）
-    scroll: scrollContainer || true,
+    forceFallback: true, // 使用 fallback 模式更可靠
+    fallbackOnBody: true, // 允许在 body 上拖动
+    swapThreshold: 0.65, // 交换阈值
     scrollSensitivity: 80,
     scrollSpeed: 20,
     bubbleScroll: true,
-    // 开始拖动时添加鼠标移动监听
-    onStart: () => {
-      if (mouseMoveHandler && scrollContainer) {
-        // 使用 capture 模式确保能捕获到事件
-        document.addEventListener("mousemove", mouseMoveHandler, { capture: true, passive: true });
-      }
-    },
+     
     // 结束拖动时移除鼠标移动监听
     onEnd: async (evt) => {
-      // 移除鼠标移动监听
-      if (mouseMoveHandler) {
-        document.removeEventListener("mousemove", mouseMoveHandler, { capture: true } as any);
-      }
       // 取消待执行的动画帧
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
@@ -379,22 +267,7 @@ function initSortable() {
       ) {
         return;
       }
-
-      // 检查索引是否有效
-      if (
-        oldIndex < 0 ||
-        oldIndex >= scripts.value.length ||
-        newIndex < 0 ||
-        newIndex >= scripts.value.length
-      ) {
-        console.error("拖拽索引无效:", {
-          oldIndex,
-          newIndex,
-          length: scripts.value.length,
-        });
-        return;
-      }
-
+      
       // 更新本地数组顺序
       const movedScript = scripts.value.splice(oldIndex, 1)[0];
       if (!movedScript) {
